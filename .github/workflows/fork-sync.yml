@@ -11,6 +11,10 @@ on:
   schedule:
     # Every 6 hours; upstream releases a Nightly a few times a day.
     - cron: '17 */6 * * *'
+  # A push that changes this file runs one straight away: the way to test a change to the sync.
+  push:
+    paths:
+      - '.github/workflows/fork-sync.yml'
   workflow_dispatch:
 
 permissions:
