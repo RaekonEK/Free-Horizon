@@ -13,3 +13,11 @@ pub const OFFLINE_PLAY: bool = true;
 /// game releases only, never a Nightly of Minecraft: Rust Edition. A debug build (`cargo build`)
 /// still sees them.
 pub const NIGHTLIES: bool = cfg!(debug_assertions);
+
+/// Whether the launcher replaces itself with a newer one from Horizon's own releases. This fork
+/// publishes its launcher itself (`.github/workflows/fork-launcher-release.yml`,
+/// `fork-launcher-vX.Y.Z`), and upstream's `launcher@X.Y.Z` builds are not this build: letting the
+/// old self-update run installs upstream's launcher over this one, which drops what makes it
+/// Free-Horizon (the bundled fonts, the offline default). Download the newest
+/// `fork-launcher-v*` release to update by hand instead.
+pub const LAUNCHER_UPDATES: bool = false;

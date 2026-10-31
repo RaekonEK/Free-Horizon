@@ -2,6 +2,11 @@ name: fork launcher release
 # Free-Horizon: rebuild the launcher after every push that changes it, and publish the Windows
 # launcher as a new GitHub release. Upstream's launcher.yml builds three systems and signs its
 # checksums with the release key, which a fork does not have, so this workflow is the fork's own.
+#
+# The version is real: the patch after the newest `fork-launcher-vX.Y.Z` tag (or launcher/Cargo.toml's
+# version for the first release), given to the build through HORIZON_LAUNCHER_VERSION the way
+# upstream's launcher.yml does, so `horizon-launcher --version`, the About box and the release all
+# say the same number: v0.2.1, v0.2.2, ... (no bump commits).
 on:
   push:
     branches: [main]
@@ -27,7 +32,10 @@ jobs:
       # Test runs never reach the telemetry server.
       HORIZON_TELEMETRY_URL: "off"
     steps:
+      # Tags carry the version, so the whole history comes along.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -48,28 +56,58 @@ jobs:
           echo "Using $fxc"
           echo "GPUI_FXC_PATH=$fxc" >> "$GITHUB_ENV"
 
+      # The real version, worked out before the build so the .exe itself carries it.
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' launcher/Cargo.toml | head -1)
+          last=$(git tag -l 'fork-launcher-v[0-9]*' \
+            | sed 's/^fork-launcher-v//' \
+            | sed -n 's/^\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p' \
+            | sort -V | tail -1)
+          base=${last:-$cargo_version}
+          # The newest tag may be older than launcher/Cargo.toml (a version bumped by hand).
+          if [ "$(printf '%s\n%s\n' "$base" "$cargo_version" | sort -V | tail -1)" = "$cargo_version" ]; then
+            base=$cargo_version
+          fi
+          IFS=. read -r major minor patch <<< "$base"
+          version="$major.$minor.$((patch + 1))"
+          echo "New version: $version (after $base)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=fork-launcher-v$version" >> "$GITHUB_OUTPUT"
+          echo "HORIZON_LAUNCHER_VERSION=$version" >> "$GITHUB_ENV"
+          echo "HORIZON_LAUNCHER_TAG=fork-launcher-v$version" >> "$GITHUB_ENV"
+
       - name: Build the launcher
         working-directory: launcher
         run: cargo build --release --locked
 
-      - name: Version and tag
-        id: version
+      - name: The build carries the real version
         shell: bash
-        working-directory: launcher
+        env:
+          EXPECTED: ${{ steps.version.outputs.version }}
         run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=fork-launcher-v$version-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-          "$PWD/target/release/horizon-launcher.exe" --version
+          set -euo pipefail
+          out=$(launcher/target/release/horizon-launcher.exe --version)
+          echo "$out"
+          if [ "$out" != "horizon-launcher $EXPECTED" ]; then
+            echo "::error::expected 'horizon-launcher $EXPECTED'"
+            exit 1
+          fi
 
       - name: Package
         shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
           mkdir -p dist
           cp launcher/target/release/horizon-launcher.exe dist/
-          (cd dist && 7z a ../horizon-launcher-windows-x64.zip horizon-launcher.exe > /dev/null)
-          sha256sum horizon-launcher-windows-x64.zip > dist/SHA256SUMS
-          ls -l horizon-launcher-windows-x64.zip dist/SHA256SUMS
+          (cd dist && 7z a ../free-horizon-launcher-windows-x64.zip horizon-launcher.exe > /dev/null)
+          sha256sum free-horizon-launcher-windows-x64.zip > dist/SHA256SUMS
+          ls -l free-horizon-launcher-windows-x64.zip dist/SHA256SUMS
 
       - name: Publish the release
         shell: bash
@@ -78,10 +116,11 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
+          set -euo pipefail
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
-            --title "Free-Horizon launcher v$VERSION (build ${{ github.run_number }})" \
-            --notes "Windows release of the Free-Horizon launcher, built from ${{ github.sha }} by the fork launcher release workflow.
+            --title "Free-Horizon launcher v$VERSION" \
+            --notes "Windows release of the Free-Horizon launcher v$VERSION, built from ${{ github.sha }} by the fork launcher release workflow.
 
           Offline play is on by default: no Microsoft sign-in is needed to play. Release builds list and update to published \`v*\` game releases only, never a Nightly." \
-            horizon-launcher-windows-x64.zip dist/SHA256SUMS
+            free-horizon-launcher-windows-x64.zip dist/SHA256SUMS

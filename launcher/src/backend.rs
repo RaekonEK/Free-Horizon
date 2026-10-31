@@ -2345,7 +2345,14 @@ fn launcher_update_from(releases: &[Release], own: &str) -> Option<Release> {
 pub fn releases_and_updates(
     on_releases: impl FnOnce(Result<Vec<Release>, String>),
 ) -> Result<Updates, String> {
-    releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)
+    let mut updates =
+        releases_and_updates_with(release_list, installed, launcher_releases_in, on_releases)?;
+    // This fork's launcher comes from its own workflow, not from Horizon's releases: offering
+    // upstream's `launcher@X.Y.Z` as an update would replace it ([`crate::fork::LAUNCHER_UPDATES`]).
+    if !crate::fork::LAUNCHER_UPDATES {
+        updates.launcher = None;
+    }
+    Ok(updates)
 }
 
 fn releases_and_updates_with(
@@ -2428,9 +2435,12 @@ pub fn exe_path() -> &'static Path {
     EXE.get_or_init(|| std::env::current_exe().unwrap_or_else(|_| PathBuf::from(LAUNCHER_BINARY)))
 }
 
-/// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves.
+/// Development builds and `HORIZON_LAUNCHER_NO_SELF_UPDATE` never replace themselves, and this
+/// fork's launcher never does either ([`crate::fork::LAUNCHER_UPDATES`]).
 pub fn self_update_allowed() -> bool {
-    !cfg!(debug_assertions) && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
+    crate::fork::LAUNCHER_UPDATES
+        && !cfg!(debug_assertions)
+        && std::env::var_os("HORIZON_LAUNCHER_NO_SELF_UPDATE").is_none()
 }
 
 /// The version in `horizon-launcher --version`'s output (`horizon-launcher 0.1.5`).
