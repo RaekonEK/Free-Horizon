@@ -131,7 +131,7 @@ jobs:
             printf 'dropped by the merge:\n%s' "$missing"
             exit 1
           fi
-          git show --stat --oneline HEAD | head -30
+          git show --stat --oneline -1 HEAD
 
       - uses: dtolnay/rust-toolchain@stable
         if: steps.pending.outputs.needed == 'true'
@@ -184,7 +184,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Nothing was pushed: say so where it is seen, once per broken sync.
+      # Nothing was pushed: say so where it is seen. The run page always has the summary; an
+      # issue is opened too where the repository has issues turned on.
       - name: Report a sync that needs a hand
         if: failure()
         env:
@@ -194,12 +195,10 @@ jobs:
           FILES: ${{ steps.conflicts.outputs.files }}
         run: |
           title="Fork sync needs a hand: upstream changes clash with this fork"
-          if gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number' | grep -q .; then
-            echo "An issue is already open."
-            exit 0
-          fi
           {
-            echo "The scheduled \`fork sync\` run merged \`horizon-rust/horizon\` into \`main\`, but the result would break this fork, so nothing was pushed (\`main\` is unchanged)."
+            echo "## ❌ $title"
+            echo
+            echo "\`main\` was **not** changed: nothing was pushed."
             echo
             echo "- a merge commit was made: \`${MERGED:-no}\`"
             if [ -n "${FILES:-}" ]; then
@@ -217,6 +216,7 @@ jobs:
             echo
             echo "Run: $RUN_URL"
             echo
-            echo "Fix what upstream changed around those lines, then run \`fork sync\` again from the Actions tab."
-          } > /tmp/issue.md
-          gh issue create --title "$title" --body-file /tmp/issue.md || true
+            echo "Fix what upstream changed around those lines, then run \`fork sync\` again."
+          } > /tmp/report.md
+          cat /tmp/report.md >> "$GITHUB_STEP_SUMMARY"
+          gh issue create --title "$title" --body-file /tmp/report.md 2>/dev/null || true
