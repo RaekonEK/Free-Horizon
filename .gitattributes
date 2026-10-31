@@ -4,3 +4,13 @@ docs/launcher-commands.md text eol=lf
 docs/horizon-ctl-commands.md text eol=lf
 crates/horizon-theme/tokens.css text eol=lf
 docs/api/*-reference.md text eol=lf
+
+# Free-Horizon fork: Microsoft sign-in stays optional. These files hold that change, so an
+# upstream merge keeps this side of them (`git config merge.ours.driver true` once per clone);
+# every other file updates from upstream as usual.
+launcher/src/backend.rs merge=ours
+launcher/src/cli.rs merge=ours
+launcher/src/dev_options.rs merge=ours
+launcher/src/main.rs merge=ours
+launcher/src/owner_page.rs merge=ours
+launcher/src/switch_page.rs merge=ours

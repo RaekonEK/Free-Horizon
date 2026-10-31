@@ -308,11 +308,17 @@ pub fn releases() -> Result<Vec<Release>, String> {
     Ok(game_releases(&release_list()?))
 }
 
+/// Whether Nightly builds are offered at all. The release build hides them: players get the
+/// published `v*` releases only, never a Nightly of Minecraft: Rust Edition. A `cargo build`
+/// (debug) still lists and updates to them, for development.
+pub(crate) const NIGHTLIES: bool = cfg!(debug_assertions);
+
 /// The game's builds in `list`, newest first. A Nightly is listed under the version it installs as
-/// ([`crate::nightly::version_of`]); only the current one (`nightly`) is an update.
+/// ([`crate::nightly::version_of`]); only the current one (`nightly`) is an update. Release
+/// builds leave every Nightly out ([`NIGHTLIES`]).
 pub(crate) fn game_releases(list: &serde_json::Value) -> Vec<Release> {
     let mut out = parse_releases(list, ASSET, |tag| {
-        is_game_tag(tag) || horizon_release_sign::is_nightly(tag)
+        is_game_tag(tag) || (NIGHTLIES && horizon_release_sign::is_nightly(tag))
     });
     for r in &mut out {
         if horizon_release_sign::is_nightly(&r.tag) {
@@ -2978,12 +2984,13 @@ pub struct Settings {
     /// The player has read what installing a native mod starts (`native_mods::needs_notice`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub native_mods_noticed: bool,
-    /// Developer options (hidden: seven clicks on the sidebar's launcher version reveal them):
-    /// offline names play without an account that owns the game, in the window only
-    /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game still
-    /// comes from the player's own install. Off by default, and absent from the file while off.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub dev_offline: bool,
+    /// Offline play (Settings → Account → Play offline): offline names, and the game's own name,
+    /// play without a Microsoft account that owns the game, in the window only
+    /// (`account::Accounts::play_as_with`, `account::launch_for_game`). Never a download: the game
+    /// still comes from the player's own install. On by default — Microsoft sign-in is optional —
+    /// and `Some(false)` once the player turns it off (absent means on).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev_offline: Option<bool>,
 }
 
 impl Settings {
@@ -3025,6 +3032,11 @@ impl Settings {
     /// Whether the launcher keeps its entry in the applications menu (Linux).
     pub fn desktop_entry(&self) -> bool {
         self.desktop_entry.unwrap_or(true)
+    }
+    /// Whether offline play is on: the default, unless the player turned it off. Microsoft
+    /// sign-in is optional, so offline names play without an account that owns the game.
+    pub fn offline_play(&self) -> bool {
+        self.dev_offline.unwrap_or(true)
     }
     /// The window's language: the one picked, else the system's.
     pub fn language(&self) -> crate::i18n::Language {

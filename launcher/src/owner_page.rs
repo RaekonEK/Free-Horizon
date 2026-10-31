@@ -14,11 +14,11 @@ impl Launcher {
             && self.opening.is_none()
     }
 
-    /// `owner` as the window shows it: the developer option that lets offline names play without
-    /// an owner (`dev_options`) hides the gate, as if the keychain hadn't answered yet.
+    /// `owner` as the window shows it: offline play (Settings → Account) makes an owner
+    /// unnecessary, so the gate stays hidden as if the keychain hadn't answered yet.
     pub(crate) fn owner_shown(&self) -> Option<bool> {
         match self.owner {
-            Some(false) if self.settings.dev_offline => None,
+            Some(false) if self.settings.offline_play() => None,
             owner => owner,
         }
     }
@@ -57,7 +57,7 @@ impl Launcher {
                     .child(format!("{}.", tr(account::NEEDS_OWNER))),
             )
             .child(text(theme::UI).text_color(t.muted).child(tr(
-                "Horizon needs a Microsoft account that owns Minecraft: Java Edition, like other launchers.",
+                "Horizon can play offline without one. A Microsoft account that owns Minecraft: Java Edition is needed for online servers, skins, and for the launcher to download the game itself.",
             )))
             .child(text(theme::UI).text_color(t.muted).child(tr(
                 "Your worlds, offline names and settings stay where they are.",
@@ -100,6 +100,17 @@ impl Launcher {
             .child(
                 button("owner-later", "Not now", Kind::Secondary, &t).on_click(cx.listener(
                     |this, _: &ClickEvent, _, cx| {
+                        this.close_owner_screen();
+                        cx.notify();
+                    },
+                )),
+            )
+            .child(
+                button("owner-offline", "Play offline", Kind::Ghost, &t).on_click(cx.listener(
+                    |this, _: &ClickEvent, _, cx| {
+                        this.settings.dev_offline = Some(true);
+                        this.settings.save();
+                        this.owner = None;
                         this.close_owner_screen();
                         cx.notify();
                     },
