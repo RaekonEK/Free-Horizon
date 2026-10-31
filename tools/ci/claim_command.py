@@ -10,8 +10,9 @@ A comment on an issue, on its first line:
     /unclaim           unassigns the commenter
     /unclaim @login    Ludovic and the trusted reviewers (.github/trusted-reviewers.txt) release someone else's claim
 
-An assigned issue is taken. Refused with a one-line answer: a pull request (claim the issue it fixes), a closed or
-locked issue, an issue someone else holds, more than 5 open claims at once (Ludovic and the trusted reviewers have no
+An assigned issue is taken, and so is one claimed on Discord (Kira's `in progress` label). Refused with a one-line
+answer: a pull request (claim the issue it fixes), a closed or locked issue, an issue someone else holds, more than
+8 open claims at once, not counting issues a pull request already fixes (Ludovic and the trusted reviewers have no
 limit). A success answers with a 👍 on the comment; the assignment shows in the thread.
 A claim made here is released after 5 days unless an open pull request links the issue (`Fixes #N`, a mention, or the
 sidebar's link); assignments made by hand are never released. No code of any pull request is read or run: only the
@@ -32,12 +33,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nightly_set as ns  # noqa: E402  (the same trusted reviewers and owner)
 
 PREFIX = "🤖 Claims: "
-MAX_CLAIMS = 5
+MAX_CLAIMS = 8
 STALE = timedelta(days=5)
 LOGIN = re.compile(r"^@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))$")
 USAGE = "Use `/claim` or `/unclaim` (the trusted reviewers: `/unclaim @login`)."
 # The login GitHub shows for this workflow's token: `github-actions[bot]` in REST, `github-actions` in GraphQL.
 BOT_LOGINS = ("github-actions", "github-actions[bot]")
+# Kira's Discord `/claim` marks an issue with this label (horizon-rust/kira, WORK.label): it is taken too.
+KIRA_LABEL = "in progress"
 
 
 class Refused(Exception):
@@ -58,6 +61,8 @@ def safe(text: str) -> str:
 def parse(body: str) -> Command | None:
     """The command on a comment's first line; None when it isn't one. Raises Refused when it is one, but wrong."""
     line = next((line.strip() for line in body.splitlines() if line.strip()), "")
+    # Agents start every comment with "🤖 Agent:" (CLAUDE.md), so their `/claim` follows it.
+    line = re.sub(r"^🤖\s*Agent:\s*", "", line)
     m = re.match(r"^/(\w+)(?:\s+(.*))?$", line)
     if not m or m.group(1).lower() not in ("claim", "unclaim"):
         return None
@@ -141,7 +146,9 @@ class Api:
         gh("api", "-X", "DELETE", f"repos/{self.repo}/issues/{n}/assignees", "-f", f"assignees[]={login}")
 
     def open_claims(self, login: str) -> int:
-        q = f"repo:{self.repo} is:issue is:open assignee:{login}"
+        # An issue a pull request already fixes (linked by "Fixes #N") is done on the contributor's side: it no
+        # longer counts, since a review can take days (rdbtCVS, 2026-10-30).
+        q = f"repo:{self.repo} is:issue is:open assignee:{login} -linked:pr"
         return int(gh("api", "-X", "GET", "search/issues", "-f", f"q={q}", "-f", "per_page=1", "--jq", ".total_count"))
 
     def react(self, comment_id: int) -> None:
@@ -179,6 +186,9 @@ def run(api, cmd: Command, login: str, number: int, reviewers: ns.Reviewers) -> 
         if holders:
             names = ", ".join(f"@{h}" for h in holders)
             raise Refused(f"{names} already claimed this issue: pick another, or ask them here.")
+        if KIRA_LABEL in {str(l.get("name", "")).lower() for l in issue.get("labels") or []}:
+            raise Refused(f"someone claimed this issue on Discord (Kira's `{KIRA_LABEL}` label): pick another, or ask "
+                          "in the thread.")
         if not is_team(login, reviewers) and api.open_claims(login) >= MAX_CLAIMS:
             raise Refused(f"You hold {MAX_CLAIMS} open issues: finish or `/unclaim` one first.")
         if login.lower() not in {a.lower() for a in api.assign(number, login)}:
