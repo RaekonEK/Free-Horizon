@@ -21,7 +21,7 @@ rem released launcher instead of a number of its own. Offline, the build keeps i
 set "LAUNCHER_VERSION="
 set "FH_VERSION_FILE=%TEMP%\free-horizon-launcher-version.txt"
 if exist "%FH_VERSION_FILE%" del "%FH_VERSION_FILE%" >nul 2>&1
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-RestMethod -Uri 'https://api.github.com/repos/horizon-rust/horizon/releases?per_page=100' -Headers @{ 'User-Agent' = 'Free-Horizon' }; $v = @($r.tag_name | Where-Object { $_ -match '^launcher[@-]v?[0-9]' } | ForEach-Object { $_ -replace '^launcher[@-]v?', '' } | Sort-Object { [version]$_ }); if ($v.Count -gt 0) { Write-Output $v[-1] } } catch { }" > "%FH_VERSION_FILE%" 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-RestMethod -Uri 'https://api.github.com/repos/horizon-rust/horizon/releases?per_page=100' -Headers @{ 'User-Agent' = 'Free-Horizon' }; $v = @($r.tag_name | Where-Object { $_ -match '^launcher[@-]v?[0-9]' } | ForEach-Object { $_ -replace '^launcher[@-]v?', '' } | Select-Object -First 1); if ($v.Count -gt 0) { Write-Output $v[0] } } catch { }" > "%FH_VERSION_FILE%" 2>nul
 if exist "%FH_VERSION_FILE%" set /p LAUNCHER_VERSION=<"%FH_VERSION_FILE%"
 del "%FH_VERSION_FILE%" >nul 2>&1
 if defined LAUNCHER_VERSION (

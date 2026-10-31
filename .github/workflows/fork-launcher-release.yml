@@ -63,8 +63,8 @@ jobs:
           echo "GPUI_FXC_PATH=$fxc" >> "$GITHUB_ENV"
 
       # The number is the official launcher's: the newest horizon-rust/horizon release whose tag is
-      # `launcher@X.Y.Z` (older ones are `launcher-vX.Y.Z`). Free-Horizon does not count its own
-      # builds, so the two launchers always carry the same version.
+      # `launcher@X.Y.Z` (older ones were `launcher-vX.Y.Z`, on a different number line). Free-Horizon
+      # does not count its own builds, so the two launchers always carry the same version.
       - name: Work out the version
         id: version
         shell: bash
@@ -72,10 +72,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          official=$(gh release list --repo horizon-rust/horizon --limit 500 \
+          # `gh release list` is newest first: the first launcher tag is the official current one
+          # (sorting the versions would pick the older `launcher-v0.17.0` number line).
+          official=$(gh release list --repo horizon-rust/horizon --limit 200 \
             --json tagName --jq '.[].tagName' 2>/dev/null \
             | sed -n 's/^launcher[@-]v\{0,1\}\([0-9][0-9.]*\)$/\1/p' \
-            | sort -V | tail -1 || true)
+            | head -1 || true)
           if [ -z "$official" ]; then
             # No network, or the API refused: stay on the number this fork last used, then on
             # whatever launcher/Cargo.toml says.
