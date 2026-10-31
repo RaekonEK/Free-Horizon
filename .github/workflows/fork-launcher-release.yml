@@ -3,16 +3,22 @@ name: fork launcher release
 # launcher as a new GitHub release. Upstream's launcher.yml builds three systems and signs its
 # checksums with the release key, which a fork does not have, so this workflow is the fork's own.
 #
-# The version is real: the patch after the newest `fork-launcher-vX.Y.Z` tag (or launcher/Cargo.toml's
-# version for the first release), given to the build through HORIZON_LAUNCHER_VERSION the way
-# upstream's launcher.yml does, so `horizon-launcher --version`, the About box and the release all
-# say the same number: v0.2.1, v0.2.2, ... (no bump commits).
+# The version is this fork's launcher version only in name: it is always the number of the official
+# launcher, horizon-rust/horizon's newest `launcher@X.Y.Z` release, so the two stay in parity
+# (v0.2.30 here is v0.2.30 there). It is given to the build through HORIZON_LAUNCHER_VERSION the way
+# upstream's launcher.yml does, so `horizon-launcher --version`, the About box, the tag and the
+# release all say the same number (no bump commits). When the official number has not moved since
+# the last build, the existing release is rebuilt in place instead of getting a second tag.
 on:
   push:
     branches: [main]
     paths:
       - 'launcher/**'
       - '.github/workflows/fork-launcher-release.yml'
+  # The official number moving is not a change to this tree, so it is also checked on a schedule
+  # (a run that finds the same number does nothing). Offset from fork sync's own 6-hourly run.
+  schedule:
+    - cron: '41 */6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -56,35 +62,56 @@ jobs:
           echo "Using $fxc"
           echo "GPUI_FXC_PATH=$fxc" >> "$GITHUB_ENV"
 
-      # The real version, worked out before the build so the .exe itself carries it.
+      # The number is the official launcher's: the newest horizon-rust/horizon release whose tag is
+      # `launcher@X.Y.Z` (older ones are `launcher-vX.Y.Z`). Free-Horizon does not count its own
+      # builds, so the two launchers always carry the same version.
       - name: Work out the version
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' launcher/Cargo.toml | head -1)
-          last=$(git tag -l 'fork-launcher-v[0-9]*' \
-            | sed 's/^fork-launcher-v//' \
-            | sed -n 's/^\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p' \
-            | sort -V | tail -1)
-          base=${last:-$cargo_version}
-          # The newest tag may be older than launcher/Cargo.toml (a version bumped by hand).
-          if [ "$(printf '%s\n%s\n' "$base" "$cargo_version" | sort -V | tail -1)" = "$cargo_version" ]; then
-            base=$cargo_version
+          official=$(gh release list --repo horizon-rust/horizon --limit 500 \
+            --json tagName --jq '.[].tagName' 2>/dev/null \
+            | sed -n 's/^launcher[@-]v\{0,1\}\([0-9][0-9.]*\)$/\1/p' \
+            | sort -V | tail -1 || true)
+          if [ -z "$official" ]; then
+            # No network, or the API refused: stay on the number this fork last used, then on
+            # whatever launcher/Cargo.toml says.
+            official=$(git tag -l 'fork-launcher-v[0-9]*' | sed 's/^fork-launcher-v//' | sort -V | tail -1)
+            if [ -n "$official" ]; then
+              echo "::warning::could not read horizon-rust/horizon's launcher version; reusing $official"
+            fi
           fi
-          IFS=. read -r major minor patch <<< "$base"
-          version="$major.$minor.$((patch + 1))"
-          echo "New version: $version (after $base)"
+          if [ -z "$official" ]; then
+            echo "::warning::no official version and no previous build; using launcher/Cargo.toml"
+            official=$(sed -n 's/^version = "\(.*\)"/\1/p' launcher/Cargo.toml | head -1)
+          fi
+          version="$official"
+          tag="fork-launcher-v$version"
+          # A scheduled run exists only to follow the official number: when it has not moved, there
+          # is nothing to build. Pushes and manual (or fork sync's) runs always build.
+          build=true
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] \
+            && git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            build=false
+            echo "The official launcher is still $version; nothing to build."
+          fi
+          echo "Version: $version (horizon-rust/horizon's newest launcher release)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=fork-launcher-v$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "HORIZON_LAUNCHER_VERSION=$version" >> "$GITHUB_ENV"
-          echo "HORIZON_LAUNCHER_TAG=fork-launcher-v$version" >> "$GITHUB_ENV"
+          echo "HORIZON_LAUNCHER_TAG=$tag" >> "$GITHUB_ENV"
 
       - name: Build the launcher
+        if: steps.version.outputs.build == 'true'
         working-directory: launcher
         run: cargo build --release --locked
 
       - name: The build carries the real version
+        if: steps.version.outputs.build == 'true'
         shell: bash
         env:
           EXPECTED: ${{ steps.version.outputs.version }}
@@ -98,6 +125,7 @@ jobs:
           fi
 
       - name: Package
+        if: steps.version.outputs.build == 'true'
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -110,6 +138,7 @@ jobs:
           ls -l free-horizon-launcher-windows-x64.zip dist/SHA256SUMS
 
       - name: Publish the release
+        if: steps.version.outputs.build == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -117,10 +146,20 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "Free-Horizon launcher v$VERSION" \
-            --notes "Windows release of the Free-Horizon launcher v$VERSION, built from ${{ github.sha }} by the fork launcher release workflow.
+          title="Free-Horizon launcher v$VERSION"
+          notes="Windows release of the Free-Horizon launcher v$VERSION, the same version as the official launcher (horizon-rust/horizon), built from ${{ github.sha }} by the fork launcher release workflow.
 
-          Offline play is on by default: no Microsoft sign-in is needed to play. Release builds list and update to published \`v*\` game releases only, never a Nightly." \
-            free-horizon-launcher-windows-x64.zip dist/SHA256SUMS
+          Offline play is on by default: no Microsoft sign-in is needed to play. Release builds list and update to published \`v*\` game releases only, never a Nightly."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # The official number has not moved since the last build: the release keeps its tag and
+            # gets the new binary, so the version stays in parity instead of counting up.
+            gh release upload "$TAG" --clobber \
+              free-horizon-launcher-windows-x64.zip dist/SHA256SUMS
+            gh release edit "$TAG" --title "$title" --notes "$notes"
+          else
+            gh release create "$TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$title" \
+              --notes "$notes" \
+              free-horizon-launcher-windows-x64.zip dist/SHA256SUMS
+          fi
