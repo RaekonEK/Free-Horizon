@@ -308,17 +308,12 @@ pub fn releases() -> Result<Vec<Release>, String> {
     Ok(game_releases(&release_list()?))
 }
 
-/// Whether Nightly builds are offered at all. The release build hides them: players get the
-/// published `v*` releases only, never a Nightly of Minecraft: Rust Edition. A `cargo build`
-/// (debug) still lists and updates to them, for development.
-pub(crate) const NIGHTLIES: bool = cfg!(debug_assertions);
-
 /// The game's builds in `list`, newest first. A Nightly is listed under the version it installs as
 /// ([`crate::nightly::version_of`]); only the current one (`nightly`) is an update. Release
-/// builds leave every Nightly out ([`NIGHTLIES`]).
+/// builds leave every Nightly out ([`crate::fork::NIGHTLIES`]).
 pub(crate) fn game_releases(list: &serde_json::Value) -> Vec<Release> {
     let mut out = parse_releases(list, ASSET, |tag| {
-        is_game_tag(tag) || (NIGHTLIES && horizon_release_sign::is_nightly(tag))
+        is_game_tag(tag) || (crate::fork::NIGHTLIES && horizon_release_sign::is_nightly(tag))
     });
     for r in &mut out {
         if horizon_release_sign::is_nightly(&r.tag) {
@@ -3033,10 +3028,11 @@ impl Settings {
     pub fn desktop_entry(&self) -> bool {
         self.desktop_entry.unwrap_or(true)
     }
-    /// Whether offline play is on: the default, unless the player turned it off. Microsoft
-    /// sign-in is optional, so offline names play without an account that owns the game.
+    /// Whether offline play is on: on by default ([`crate::fork::OFFLINE_PLAY`]), unless the
+    /// player turned it off. Microsoft sign-in is optional, so offline names play without an
+    /// account that owns the game.
     pub fn offline_play(&self) -> bool {
-        self.dev_offline.unwrap_or(true)
+        self.dev_offline.unwrap_or(crate::fork::OFFLINE_PLAY)
     }
     /// The window's language: the one picked, else the system's.
     pub fn language(&self) -> crate::i18n::Language {
