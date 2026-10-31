@@ -1,0 +1,87 @@
+name: fork launcher release
+# Free-Horizon: rebuild the launcher after every push that changes it, and publish the Windows
+# launcher as a new GitHub release. Upstream's launcher.yml builds three systems and signs its
+# checksums with the release key, which a fork does not have, so this workflow is the fork's own.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'launcher/**'
+      - '.github/workflows/fork-launcher-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-launcher-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      # Static C runtime: the .exe then needs no Visual C++ redistributable.
+      RUSTFLAGS: -C target-feature=+crt-static
+      # Test runs never reach the telemetry server.
+      HORIZON_TELEMETRY_URL: "off"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: launcher
+          shared-key: fork-launcher
+
+      # gpui compiles its HLSL shaders with fxc.exe, which ships with the Windows SDK on the runner.
+      - name: Find fxc.exe
+        shell: bash
+        run: |
+          fxc=$(ls "/c/Program Files (x86)/Windows Kits/10/bin/"*/x64/fxc.exe 2>/dev/null | sort -V | tail -1)
+          if [ -z "$fxc" ]; then
+            echo "::error::fxc.exe not found on this runner"
+            exit 1
+          fi
+          echo "Using $fxc"
+          echo "GPUI_FXC_PATH=$fxc" >> "$GITHUB_ENV"
+
+      - name: Build the launcher
+        working-directory: launcher
+        run: cargo build --release --locked
+
+      - name: Version and tag
+        id: version
+        shell: bash
+        working-directory: launcher
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=fork-launcher-v$version-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          "$PWD/target/release/horizon-launcher.exe" --version
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp launcher/target/release/horizon-launcher.exe dist/
+          (cd dist && 7z a ../horizon-launcher-windows-x64.zip horizon-launcher.exe > /dev/null)
+          (cd dist && sha256sum horizon-launcher-windows-x64.zip > SHA256SUMS)
+          ls -l horizon-launcher-windows-x64.zip dist/SHA256SUMS
+
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Free-Horizon launcher v$VERSION (build ${{ github.run_number }})" \
+            --notes "Windows release of the Free-Horizon launcher, built from ${{ github.sha }} by the fork launcher release workflow.
+
+          Offline play is on by default: no Microsoft sign-in is needed to play. Release builds list and update to published \`v*\` game releases only, never a Nightly." \
+            horizon-launcher-windows-x64.zip dist/SHA256SUMS
