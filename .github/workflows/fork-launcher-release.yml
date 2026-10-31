@@ -68,7 +68,7 @@ jobs:
           mkdir -p dist
           cp launcher/target/release/horizon-launcher.exe dist/
           (cd dist && 7z a ../horizon-launcher-windows-x64.zip horizon-launcher.exe > /dev/null)
-          (cd dist && sha256sum horizon-launcher-windows-x64.zip > SHA256SUMS)
+          sha256sum horizon-launcher-windows-x64.zip > dist/SHA256SUMS
           ls -l horizon-launcher-windows-x64.zip dist/SHA256SUMS
 
       - name: Publish the release
