@@ -30,8 +30,11 @@ echo Updating from origin...
 git pull --ff-only origin main
 if errorlevel 1 goto fail
 
-echo Merging upstream/main ^(fork.rs and its values stay^)...
-git merge --no-edit upstream/main
+rem GitHub already merges upstream into origin/main every 6 hours (fork sync), keeping this
+rem fork's side of any hunk upstream also touched. This merge is the fallback for a folder that
+rem has been offline; it uses the same rule (-X ours), so fork.rs and the lines that read it stay.
+echo Merging upstream/main ^(this fork's own changes stay^)...
+git merge --no-edit -X ours upstream/main
 if errorlevel 1 goto conflict
 
 if defined DIRTY (

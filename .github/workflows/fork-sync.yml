@@ -1,0 +1,191 @@
+name: fork sync
+# Free-Horizon: pull upstream (horizon-rust/horizon) into main automatically.
+#
+# What comes in: everything upstream changed.
+# What stays: this fork's own changes. A hunk upstream also touched (a merge conflict) keeps our
+# side (`git merge -X ours`), so the code and the values that make Microsoft sign-in optional and
+# hide Nightly builds are never replaced: launcher/src/fork.rs (a file upstream does not have) and
+# the lines that read it. The run fails, without pushing, if any of them goes missing after the
+# merge, or if the launcher no longer compiles.
+on:
+  schedule:
+    # Every 6 hours; upstream releases a Nightly a few times a day.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UPSTREAM: https://github.com/horizon-rust/horizon.git
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # The whole history: a merge needs the common ancestor.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ github.token }}
+
+      - name: Point git at the bot
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM" 2>/dev/null || git remote set-url upstream "$UPSTREAM"
+          git fetch --no-tags upstream main
+
+      - name: Anything to merge?
+        id: pending
+        run: |
+          if git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            echo "Up to date with upstream."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            behind=$(git rev-list --count HEAD..FETCH_HEAD)
+            echo "Merging $behind upstream commit(s)."
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A dry run first: which files upstream changed where we did (the hunks -X ours keeps).
+      - name: Which files we keep our side of
+        if: steps.pending.outputs.needed == 'true'
+        id: conflicts
+        run: |
+          set +e
+          if git merge --no-commit --no-ff FETCH_HEAD >/dev/null 2>&1; then
+            files=""
+          else
+            files=$(git diff --name-only --diff-filter=U)
+          fi
+          git merge --abort >/dev/null 2>&1 || true
+          echo "files<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$files" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+          if [ -n "$files" ]; then
+            echo "Upstream touched, and this fork keeps its own version of:"
+            echo "$files"
+          fi
+
+      - name: Merge upstream, keeping this fork's hunks
+        if: steps.pending.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          if ! git merge --no-edit -X ours FETCH_HEAD; then
+            # -X ours settles every content conflict; what is left is a delete/modify: the file
+            # exists only on our side now, so it stays.
+            for f in $(git diff --name-only --diff-filter=U); do
+              git checkout --ours -- "$f" 2>/dev/null || git rm -q -f "$f" 2>/dev/null || true
+            done
+            git add -A
+            if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+              git commit --no-edit
+            fi
+          fi
+
+      # The load-bearing lines of the fork: if upstream's merge dropped one, main stays as it was.
+      - name: This fork's switches are still there
+        if: steps.pending.outputs.needed == 'true'
+        run: |
+          set -euo pipefail
+          status=0
+          check() {
+            if ! grep -rqF -- "$1" launcher/src; then
+              echo "::error::missing after the merge: $1"
+              status=1
+            fi
+          }
+          check 'pub const OFFLINE_PLAY: bool = true;'
+          check 'pub const NIGHTLIES: bool = cfg!(debug_assertions);'
+          check 'pub const LAUNCHER_UPDATES: bool = false;'
+          check 'crate::fork::OFFLINE_PLAY'
+          check 'crate::fork::NIGHTLIES'
+          check 'crate::fork::LAUNCHER_UPDATES'
+          check 'pub mod fork;'
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the sync would drop this fork's changes; nothing was pushed"
+            exit 1
+          fi
+          git show --stat --oneline HEAD | head -30
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.pending.outputs.needed == 'true'
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.pending.outputs.needed == 'true'
+        with:
+          workspaces: launcher
+          shared-key: fork-launcher
+
+      # A merged tree that does not build would break main for everyone: it is not pushed.
+      - name: The launcher still compiles
+        if: steps.pending.outputs.needed == 'true'
+        working-directory: launcher
+        run: cargo check --locked --all-targets
+
+      - name: Push, then rebuild the launcher if it changed
+        if: steps.pending.outputs.needed == 'true'
+        id: push
+        run: |
+          set -euo pipefail
+          before=$(git rev-parse HEAD^1)
+          git push origin HEAD:main
+          echo "after=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if git diff --name-only "$before" HEAD | grep -qE '^(launcher/|crates/horizon-)'; then
+            # A push made with GITHUB_TOKEN starts no workflow, so the release workflow is asked
+            # for explicitly (it builds and publishes the Windows launcher).
+            gh workflow run fork-launcher-release.yml --ref main || true
+            echo "launcher=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "launcher=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Say what happened
+        if: steps.pending.outputs.needed == 'true'
+        env:
+          FILES: ${{ steps.conflicts.outputs.files }}
+          AFTER: ${{ steps.push.outputs.after }}
+          LAUNCHER: ${{ steps.push.outputs.launcher }}
+        run: |
+          {
+            echo "### Fork sync"
+            echo ""
+            echo "- merged upstream \`horizon-rust/horizon@${GITHUB_SHA:+main}\` into \`main\` (now \`${AFTER:0:7}\`)"
+            if [ -n "$FILES" ]; then
+              echo "- kept this fork's side of: \`$(echo "$FILES" | tr '\n' ' ')\`"
+            fi
+            if [ "$LAUNCHER" = "true" ]; then
+              echo "- asked \`fork launcher release\` for a new launcher build"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Nothing was pushed: say so where it is seen, once per broken sync.
+      - name: Report a sync that needs a hand
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Fork sync needs a hand: upstream changes clash with this fork"
+          if gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number' | grep -q .; then
+            echo "An issue is already open."
+            exit 0
+          fi
+          gh issue create --title "$title" --body "The scheduled \`fork sync\` run merged \`horizon-rust/horizon\` into \`main\`, but the result would break this fork, so nothing was pushed (\`main\` is unchanged).
+
+          What it checks: \`launcher/src/fork.rs\` (\`OFFLINE_PLAY\`, \`NIGHTLIES\`, \`LAUNCHER_UPDATES\`) and the lines that read them, then that the launcher compiles.
+
+          Run: $RUN_URL
+
+          Fix what upstream changed around those lines, then run \`fork sync\` again from the Actions tab." \
+            || true
