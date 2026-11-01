@@ -1286,6 +1286,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-hexagon"
+version = "0.1.0"
+dependencies = [
+ "horizon-port-pack",
+ "serde",
+ "serde_json",
+ "toml",
+ "zip",
+]
+
+[[package]]
 name = "horizon-items"
 version = "0.1.0"
 dependencies = [
