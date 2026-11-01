@@ -346,8 +346,7 @@ pub fn inspect(path: &Path) -> Result<Inspection, String> {
     }
     if placeholder(&title) {
         title.clear();
-    }
-    if id.is_empty() {
+    }    if id.is_empty() {
         id = gradle_id(&props)
             .or_else(|| root_project_name(&mut zip, &names, &prefix))
             .unwrap_or_else(|| title_from_file(&file_name));
@@ -513,14 +512,12 @@ fn built_in(id: &str, title: &str) -> String {
         ("dynamiclight", "Dynamic lights are built in: Extras → Dynamic Lights."),
         ("gammautils", "Fullbright is built in: Extras → Fullbright."),
         ("gamma_utils", "Fullbright is built in: Extras → Fullbright."),
-        ("mousetweaks", "Mouse Tweaks controls are built in: Extras → Inventory."),
-        ("betterblockentities", "Horizon renders block entities natively; nothing to port."),
-        ("clumps", "Experience orbs are merged by Horizon's own item entity code."),
-        ("sodium", "Horizon's renderer replaces Sodium."),
-        ("iris", "Horizon's own renderer and shader packs replace Iris."),
-        ("embeddium", "Horizon's renderer replaces Embeddium."),
-        ("fps", "The FPS counter is built in (Extras) and an official native mod."),
-        ("keystrokes", "Keystrokes are built in (Extras) and an official native mod."),
+        ("mousetweaks", "Mouse Tweaks controls are built in: Extras → inventory."),
+        ("betterblockentities", "Horizon draws block entities in its own renderer; nothing to port."),
+        ("keystrokes", "An official native mod already does this (Mods page)."),
+        ("fpscounter", "An official native mod already does this (Mods page)."),
+        ("minimap", "An official native mod already does this (Mods page)."),
+        ("zoom", "An official native mod already does this (Mods page)."),
     ];
     for (needle, text) in table {
         if haystack.contains(needle) {
@@ -571,6 +568,11 @@ pub fn port_entry(inspection: &Inspection, work: &Path, out: &Path) -> Entry {
     match check::check(&jar_path, &destination) {
         Ok(c) => {
             fill(&mut entry, &c);
+            if entry.verdict == "Doesn't run" && entry.ports.is_empty() && entry.built_in.is_empty() {
+                entry
+                    .skipped
+                    .push("Everything it does is Java code: needs a native mod (docs/native-mods.md)".to_owned());
+            }
             let carry = destination.join("carry");
             note_unread_worldgen(&mut entry, &carry);
             let dest = out.join(format!("{}.hmod", inspection.mod_id));
