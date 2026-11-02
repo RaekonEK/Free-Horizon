@@ -7,11 +7,11 @@
 //!   game folder's `horizon-mods/`.
 //! - `install <out> --home <game folder>`: copy the `.hmod` files.
 //! - `report <out>`: print the report.
-use horizon_hexagon::{install, port_all, scan, write_report};
+use horizon_hexagon::{install, port_all, scan, translate_java, write_report};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: hexagon scan <mods folder> | hexagon port <mods folder> [--work <dir>] [--out <dir>] [--only <id,...>] [--install <game folder>] | hexagon install <out> --home <game folder> | hexagon report <out>";
+const USAGE: &str = "usage: hexagon scan <mods folder> | hexagon port <mods folder> [--work <dir>] [--out <dir>] [--only <id,...>] [--install <game folder>] | hexagon java <archive or sources folder> [--out <dir>] | hexagon install <out> --home <game folder> | hexagon report <out>";
 
 fn main() -> ExitCode {
     match run() {
@@ -30,7 +30,12 @@ fn run() -> Result<(), String> {
     let out = take_path(&mut rest, "--out")?;
     let home = take_path(&mut rest, "--home")?;
     let only = take_string(&mut rest, "--only")?
-        .map(|v| v.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect::<Vec<_>>())
+        .map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let command = rest.first().cloned().unwrap_or_default();
     let folder = rest.get(1).map(PathBuf::from);
@@ -43,7 +48,11 @@ fn run() -> Result<(), String> {
                     trim(&i.file, 42),
                     i.mod_id,
                     i.kind.label(),
-                    if i.license.is_empty() { "?" } else { &i.license },
+                    if i.license.is_empty() {
+                        "?"
+                    } else {
+                        &i.license
+                    },
                     i.note
                 );
             }
@@ -60,21 +69,67 @@ fn run() -> Result<(), String> {
                     "{:<9} {:<24} {}",
                     e.verdict,
                     e.mod_id,
-                    if e.hmod.is_empty() { &e.summary } else { &e.hmod }
+                    if e.hmod.is_empty() {
+                        &e.summary
+                    } else {
+                        &e.hmod
+                    }
                 );
             }
             println!("\n{}", out.join("hexagon-report.md").display());
             if let Some(home) = home {
                 let copied = install(&out, &home)?;
-                println!("installed {} mod(s) into {}", copied.len(), home.join("horizon-mods").display());
+                println!(
+                    "installed {} mod(s) into {}",
+                    copied.len(),
+                    home.join("horizon-mods").display()
+                );
             }
+            Ok(())
+        }
+        "java" => {
+            let source = folder.ok_or_else(|| USAGE.to_owned())?;
+            let out = out.unwrap_or_else(|| {
+                let stem = source
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "port".into());
+                source
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(".hexagon-work")
+                    .join("rust")
+                    .join(horizon_hexagon::rust_gen::snake(&stem))
+            });
+            let report = translate_java(&source, &out)?;
+            println!(
+                "{} files, {} classes, {} methods, {} statements; {} mixin(s), {} TODO(s)",
+                report.files.len(),
+                report.classes,
+                report.methods,
+                report.statements,
+                report.mixins,
+                report.issues
+            );
+            for f in &report.files {
+                println!("{:<48} {}", trim(&f.path, 48), f.written);
+            }
+            println!(
+                "\n{}\n{}",
+                out.join("hexagon-java-report.md").display(),
+                out.join("src").display()
+            );
             Ok(())
         }
         "install" => {
             let out = folder.ok_or_else(|| USAGE.to_owned())?;
             let home = home.ok_or_else(|| USAGE.to_owned())?;
             let copied = install(&out, &home)?;
-            println!("installed {} mod(s) into {}", copied.len(), home.join("horizon-mods").display());
+            println!(
+                "installed {} mod(s) into {}",
+                copied.len(),
+                home.join("horizon-mods").display()
+            );
             Ok(())
         }
         "report" => {
@@ -89,7 +144,9 @@ fn run() -> Result<(), String> {
 }
 
 fn default_work(mods: &Path) -> PathBuf {
-    mods.parent().unwrap_or(Path::new(".")).join(".hexagon-work")
+    mods.parent()
+        .unwrap_or(Path::new("."))
+        .join(".hexagon-work")
 }
 
 fn take_path(args: &mut Vec<String>, name: &str) -> Result<Option<PathBuf>, String> {

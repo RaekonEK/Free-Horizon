@@ -19,6 +19,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+pub mod java;
+pub mod rust_gen;
+
 /// What a file is, from its own contents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -141,7 +144,9 @@ fn resources(names: &[String], prefix: &str) -> Vec<(String, String)> {
             };
             let inside = &name[at + marker.len()..];
             if inside.starts_with("assets/") || inside.starts_with("data/") {
-                found.entry(inside.to_owned()).or_insert_with(|| name.clone());
+                found
+                    .entry(inside.to_owned())
+                    .or_insert_with(|| name.clone());
             }
         }
     }
@@ -150,7 +155,12 @@ fn resources(names: &[String], prefix: &str) -> Vec<(String, String)> {
 
 /// The mod's metadata file, as (name in the carried jar, name in the archive).
 fn metadata(names: &[String], prefix: &str) -> Option<(String, String)> {
-    let roots = ["META-INF/neoforge.mods.toml", "META-INF/mods.toml", "fabric.mod.json", "quilt.mod.json"];
+    let roots = [
+        "META-INF/neoforge.mods.toml",
+        "META-INF/mods.toml",
+        "fabric.mod.json",
+        "quilt.mod.json",
+    ];
     for root in roots {
         let at_root = format!("{prefix}{root}");
         if names.iter().any(|n| n == &at_root) {
@@ -167,12 +177,17 @@ fn metadata(names: &[String], prefix: &str) -> Option<(String, String)> {
 }
 
 /// The archive's top-level `gradle.properties`, read as `key=value`.
-fn gradle_properties(zip: &mut zip::ZipArchive<fs::File>, names: &[String], prefix: &str) -> BTreeMap<String, String> {
+fn gradle_properties(
+    zip: &mut zip::ZipArchive<fs::File>,
+    names: &[String],
+    prefix: &str,
+) -> BTreeMap<String, String> {
     let short = format!("{prefix}gradle.properties");
-    let found = names
-        .iter()
-        .find(|n| **n == short)
-        .or_else(|| names.iter().find(|n| n.ends_with("/gradle.properties") && n.matches('/').count() <= 2));
+    let found = names.iter().find(|n| **n == short).or_else(|| {
+        names
+            .iter()
+            .find(|n| n.ends_with("/gradle.properties") && n.matches('/').count() <= 2)
+    });
     let Some(name) = found else {
         return BTreeMap::new();
     };
@@ -196,11 +211,22 @@ fn gradle_properties(zip: &mut zip::ZipArchive<fs::File>, names: &[String], pref
         .collect()
 }
 
-fn root_project_name(zip: &mut zip::ZipArchive<fs::File>, names: &[String], prefix: &str) -> Option<String> {
+fn root_project_name(
+    zip: &mut zip::ZipArchive<fs::File>,
+    names: &[String],
+    prefix: &str,
+) -> Option<String> {
     let name = names
         .iter()
-        .find(|n| **n == format!("{prefix}settings.gradle") || **n == format!("{prefix}settings.gradle.kts"))
-        .or_else(|| names.iter().find(|n| n.ends_with("/settings.gradle") || n.ends_with("/settings.gradle.kts")))?;
+        .find(|n| {
+            **n == format!("{prefix}settings.gradle")
+                || **n == format!("{prefix}settings.gradle.kts")
+        })
+        .or_else(|| {
+            names
+                .iter()
+                .find(|n| n.ends_with("/settings.gradle") || n.ends_with("/settings.gradle.kts"))
+        })?;
     let mut text = String::new();
     zip.by_name(name).ok()?.read_to_string(&mut text).ok()?;
     for line in text.lines() {
@@ -219,11 +245,17 @@ fn root_project_name(zip: &mut zip::ZipArchive<fs::File>, names: &[String], pref
 
 /// `mod_id` (or `archives_base_name`...) when the archive has no metadata.
 fn gradle_id(props: &BTreeMap<String, String>) -> Option<String> {
-    ["mod_id", "modid", "modId", "mod_id_base", "archives_base_name"]
-        .iter()
-        .filter_map(|k| props.get(*k))
-        .map(|v| v.trim().to_owned())
-        .find(|v| !v.is_empty() && !v.contains("${") && !v.eq_ignore_ascii_case("null"))
+    [
+        "mod_id",
+        "modid",
+        "modId",
+        "mod_id_base",
+        "archives_base_name",
+    ]
+    .iter()
+    .filter_map(|k| props.get(*k))
+    .map(|v| v.trim().to_owned())
+    .find(|v| !v.is_empty() && !v.contains("${") && !v.eq_ignore_ascii_case("null"))
 }
 
 fn gradle_version(props: &BTreeMap<String, String>) -> String {
@@ -239,7 +271,13 @@ fn gradle_version(props: &BTreeMap<String, String>) -> String {
 pub fn mod_id(raw: &str) -> String {
     let mut id: String = raw
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
         .collect();
     while id.contains("__") {
         id = id.replace("__", "_");
@@ -266,9 +304,7 @@ fn title_from_file(file: &str) -> String {
     let mut words: Vec<&str> = Vec::new();
     for word in stem.split(['-', '_', ' ']).filter(|w| !w.is_empty()) {
         let v = word.to_ascii_lowercase();
-        let looks_like_version = v
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.')
+        let looks_like_version = v.chars().all(|c| c.is_ascii_digit() || c == '.')
             || v.starts_with("mc2")
             || v.starts_with("1.")
             || v == "multi"
@@ -293,7 +329,10 @@ pub fn inspect(path: &Path) -> Result<Inspection, String> {
     let file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", path.display()))?;
     let names: Vec<String> = zip.file_names().map(str::to_owned).collect();
-    let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let prefix = wrapper_prefix(&names);
     let res = resources(&names, &prefix);
     let meta = metadata(&names, &prefix);
@@ -346,7 +385,8 @@ pub fn inspect(path: &Path) -> Result<Inspection, String> {
     }
     if placeholder(&title) {
         title.clear();
-    }    if id.is_empty() {
+    }
+    if id.is_empty() {
         id = gradle_id(&props)
             .or_else(|| root_project_name(&mut zip, &names, &prefix))
             .unwrap_or_else(|| title_from_file(&file_name));
@@ -382,7 +422,9 @@ pub fn inspect(path: &Path) -> Result<Inspection, String> {
         Kind::SourceArchive => {
             "Source archive: resources carried over; code reported, never read.".to_owned()
         }
-        Kind::ResourcePack => "Applies over vanilla as a resource pack; no .hmod needed.".to_owned(),
+        Kind::ResourcePack => {
+            "Applies over vanilla as a resource pack; no .hmod needed.".to_owned()
+        }
         Kind::Other => "Nothing Horizon can carry (no assets, data or pack metadata).".to_owned(),
     };
     let _ = depends;
@@ -409,7 +451,10 @@ pub fn scan(dir: &Path) -> Result<Vec<Inspection>, String> {
         .filter(|p| {
             p.is_file()
                 && matches!(
-                    p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(),
+                    p.extension()
+                        .and_then(|e| e.to_str())
+                        .map(str::to_ascii_lowercase)
+                        .as_deref(),
                     Some("zip" | "jar")
                 )
         })
@@ -420,10 +465,15 @@ pub fn scan(dir: &Path) -> Result<Vec<Inspection>, String> {
         match inspect(&path) {
             Ok(i) => out.push(i),
             Err(e) => out.push(Inspection {
-                file: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                file: path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
                 path: path.clone(),
                 kind: Kind::Other,
-                mod_id: mod_id(&title_from_file(&path.file_name().unwrap_or_default().to_string_lossy())),
+                mod_id: mod_id(&title_from_file(
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                )),
                 title: title_from_file(&path.file_name().unwrap_or_default().to_string_lossy()),
                 version: "0.0.0".into(),
                 license: String::new(),
@@ -440,8 +490,10 @@ pub fn scan(dir: &Path) -> Result<Vec<Inspection>, String> {
 /// metadata file (the archive's own when it has one that parses, else one
 /// written from `gradle.properties`).
 fn source_jar(inspection: &Inspection, work: &Path) -> Result<PathBuf, String> {
-    let file = fs::File::open(&inspection.path).map_err(|e| format!("{}: {e}", inspection.path.display()))?;
-    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", inspection.path.display()))?;
+    let file = fs::File::open(&inspection.path)
+        .map_err(|e| format!("{}: {e}", inspection.path.display()))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", inspection.path.display()))?;
     let names: Vec<String> = zip.file_names().map(str::to_owned).collect();
     let prefix = wrapper_prefix(&names);
     let res = resources(&names, &prefix);
@@ -450,27 +502,38 @@ fn source_jar(inspection: &Inspection, work: &Path) -> Result<PathBuf, String> {
     let path = dir.join(format!("{}.jar", inspection.mod_id));
     let out = fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut writer = zip::ZipWriter::new(out);
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
     for (target, source) in &res {
         let mut bytes = Vec::new();
-        let Ok(mut entry) = zip.by_name(source) else { continue };
+        let Ok(mut entry) = zip.by_name(source) else {
+            continue;
+        };
         if entry.size() > 1 << 26 || entry.read_to_end(&mut bytes).is_err() {
             continue;
         }
-        writer.start_file(target.as_str(), options).map_err(|e| e.to_string())?;
+        writer
+            .start_file(target.as_str(), options)
+            .map_err(|e| e.to_string())?;
         writer.write_all(&bytes).map_err(|e| e.to_string())?;
     }
     let manifest = format!(
         "modLoader = \"javafml\"\nloaderVersion = \"[1,)\"\nlicense = {}\n[[mods]]\nmodId = {}\nversion = {}\ndisplayName = {}\n",
-        toml::Value::String(if inspection.license.is_empty() { "not stated".into() } else { inspection.license.clone() }).to_string(),
-        toml::Value::String(inspection.mod_id.clone()).to_string(),
-        toml::Value::String(inspection.version.clone()).to_string(),
-        toml::Value::String(inspection.title.clone()).to_string(),
+        toml::Value::String(if inspection.license.is_empty() {
+            "not stated".into()
+        } else {
+            inspection.license.clone()
+        }),
+        toml::Value::String(inspection.mod_id.clone()),
+        toml::Value::String(inspection.version.clone()),
+        toml::Value::String(inspection.title.clone()),
     );
     writer
         .start_file("META-INF/neoforge.mods.toml", options)
         .map_err(|e| e.to_string())?;
-    writer.write_all(manifest.as_bytes()).map_err(|e| e.to_string())?;
+    writer
+        .write_all(manifest.as_bytes())
+        .map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| e.to_string())?;
     Ok(path)
 }
@@ -480,8 +543,14 @@ fn pack(folder: &Path, dest: &Path) -> Result<u64, String> {
     fs::create_dir_all(dest.parent().unwrap_or(dest)).map_err(|e| e.to_string())?;
     let file = fs::File::create(dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     let mut writer = zip::ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    fn walk(dir: &Path, root: &Path, writer: &mut zip::ZipWriter<fs::File>, options: zip::write::SimpleFileOptions) -> Result<(), String> {
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    fn walk(
+        dir: &Path,
+        root: &Path,
+        writer: &mut zip::ZipWriter<fs::File>,
+        options: zip::write::SimpleFileOptions,
+    ) -> Result<(), String> {
         let mut entries: Vec<PathBuf> = fs::read_dir(dir)
             .map_err(|e| e.to_string())?
             .flatten()
@@ -492,9 +561,15 @@ fn pack(folder: &Path, dest: &Path) -> Result<u64, String> {
             if path.is_dir() {
                 walk(&path, root, writer, options)?;
             } else {
-                let name = path.strip_prefix(root).map_err(|e| e.to_string())?.to_string_lossy().replace('\\', "/");
+                let name = path
+                    .strip_prefix(root)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
                 let bytes = fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-                writer.start_file(name, options).map_err(|e| e.to_string())?;
+                writer
+                    .start_file(name, options)
+                    .map_err(|e| e.to_string())?;
                 writer.write_all(&bytes).map_err(|e| e.to_string())?;
             }
         }
@@ -502,22 +577,48 @@ fn pack(folder: &Path, dest: &Path) -> Result<u64, String> {
     }
     walk(folder, folder, &mut writer, options)?;
     writer.finish().map_err(|e| e.to_string())?;
-    fs::metadata(dest).map(|m| m.len()).map_err(|e| e.to_string())
+    fs::metadata(dest)
+        .map(|m| m.len())
+        .map_err(|e| e.to_string())
 }
 
 /// A Horizon feature that already does what this mod does, when one is known.
 fn built_in(id: &str, title: &str) -> String {
     let haystack = format!("{} {}", id, title).to_ascii_lowercase();
     let table = [
-        ("dynamiclight", "Dynamic lights are built in: Extras → Dynamic Lights."),
+        (
+            "dynamiclight",
+            "Dynamic lights are built in: Extras → Dynamic Lights.",
+        ),
         ("gammautils", "Fullbright is built in: Extras → Fullbright."),
-        ("gamma_utils", "Fullbright is built in: Extras → Fullbright."),
-        ("mousetweaks", "Mouse Tweaks controls are built in: Extras → inventory."),
-        ("betterblockentities", "Horizon draws block entities in its own renderer; nothing to port."),
-        ("keystrokes", "An official native mod already does this (Mods page)."),
-        ("fpscounter", "An official native mod already does this (Mods page)."),
-        ("minimap", "An official native mod already does this (Mods page)."),
-        ("zoom", "An official native mod already does this (Mods page)."),
+        (
+            "gamma_utils",
+            "Fullbright is built in: Extras → Fullbright.",
+        ),
+        (
+            "mousetweaks",
+            "Mouse Tweaks controls are built in: Extras → inventory.",
+        ),
+        (
+            "betterblockentities",
+            "Horizon draws block entities in its own renderer; nothing to port.",
+        ),
+        (
+            "keystrokes",
+            "An official native mod already does this (Mods page).",
+        ),
+        (
+            "fpscounter",
+            "An official native mod already does this (Mods page).",
+        ),
+        (
+            "minimap",
+            "An official native mod already does this (Mods page).",
+        ),
+        (
+            "zoom",
+            "An official native mod already does this (Mods page).",
+        ),
     ];
     for (needle, text) in table {
         if haystack.contains(needle) {
@@ -568,10 +669,12 @@ pub fn port_entry(inspection: &Inspection, work: &Path, out: &Path) -> Entry {
     match check::check(&jar_path, &destination) {
         Ok(c) => {
             fill(&mut entry, &c);
-            if entry.verdict == "Doesn't run" && entry.ports.is_empty() && entry.built_in.is_empty() {
-                entry
-                    .skipped
-                    .push("Everything it does is Java code: needs a native mod (docs/native-mods.md)".to_owned());
+            if entry.verdict == "Doesn't run" && entry.ports.is_empty() && entry.built_in.is_empty()
+            {
+                entry.skipped.push(
+                    "Everything it does is Java code: needs a native mod (docs/native-mods.md)"
+                        .to_owned(),
+                );
             }
             let carry = destination.join("carry");
             note_unread_worldgen(&mut entry, &carry);
@@ -579,7 +682,12 @@ pub fn port_entry(inspection: &Inspection, work: &Path, out: &Path) -> Entry {
             let portable = matches!(entry.verdict.as_str(), "Works" | "Partly");
             if portable && carry.join("horizon-mod.toml").is_file() {
                 match pack(&carry, &dest) {
-                    Ok(_) => entry.hmod = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    Ok(_) => {
+                        entry.hmod = dest
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    }
                     Err(e) => entry.summary = format!("{} (packaging failed: {e})", entry.summary),
                 }
             } else if dest.is_file() {
@@ -605,18 +713,24 @@ const UNREAD_WORLDGEN: [&str; 4] = ["biome", "noise", "density_function", "noise
 /// does not claim a mod's biomes ported.
 fn note_unread_worldgen(entry: &mut Entry, carry: &Path) {
     let data = carry.join("data");
-    let Ok(namespaces) = fs::read_dir(&data) else { return };
+    let Ok(namespaces) = fs::read_dir(&data) else {
+        return;
+    };
     let mut count = 0usize;
     let mut kinds: BTreeMap<&str, usize> = BTreeMap::new();
     for namespace in namespaces.flatten() {
         let worldgen = namespace.path().join("worldgen");
-        let Ok(dirs) = fs::read_dir(&worldgen) else { continue };
+        let Ok(dirs) = fs::read_dir(&worldgen) else {
+            continue;
+        };
         for dir in dirs.flatten() {
             let kind = dir.file_name().to_string_lossy().into_owned();
             let Some(kind) = UNREAD_WORLDGEN.iter().find(|k| **k == kind).copied() else {
                 continue;
             };
-            let files = fs::read_dir(dir.path()).map(|d| d.flatten().count()).unwrap_or(0);
+            let files = fs::read_dir(dir.path())
+                .map(|d| d.flatten().count())
+                .unwrap_or(0);
             count += files;
             *kinds.entry(kind).or_default() += files;
         }
@@ -649,7 +763,12 @@ fn fill(entry: &mut Entry, check: &Check) {
 }
 
 /// Scans `dir` and ports every archive into `<out>`; returns the report.
-pub fn port_all(dir: &Path, work: &Path, out: &Path, only: &[String]) -> Result<Vec<Entry>, String> {
+pub fn port_all(
+    dir: &Path,
+    work: &Path,
+    out: &Path,
+    only: &[String],
+) -> Result<Vec<Entry>, String> {
     let inspections = scan(dir)?;
     fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut entries = Vec::new();
@@ -677,9 +796,17 @@ pub fn markdown(entries: &[Entry]) -> String {
     ));
     text.push_str("| file | id | kind | verdict | ports | not ported | hmod |\n|---|---|---|---|---|---|---|\n");
     for e in entries {
-        let ports = if e.ports.is_empty() { "—".to_owned() } else { e.ports.join("; ") };
+        let ports = if e.ports.is_empty() {
+            "—".to_owned()
+        } else {
+            e.ports.join("; ")
+        };
         let skipped = if e.skipped.is_empty() {
-            if e.built_in.is_empty() { "—".to_owned() } else { e.built_in.clone() }
+            if e.built_in.is_empty() {
+                "—".to_owned()
+            } else {
+                e.built_in.clone()
+            }
         } else {
             e.skipped.join("; ")
         };
@@ -714,12 +841,19 @@ pub fn install(out: &Path, home: &Path) -> Result<Vec<String>, String> {
     fs::create_dir_all(&mods).map_err(|e| format!("{}: {e}", mods.display()))?;
     let mut copied = Vec::new();
     let mut ids = Vec::new();
-    for entry in fs::read_dir(out).map_err(|e| format!("{}: {e}", out.display()))?.flatten() {
+    for entry in fs::read_dir(out)
+        .map_err(|e| format!("{}: {e}", out.display()))?
+        .flatten()
+    {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("hmod") {
             continue;
         }
-        let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         fs::copy(&path, mods.join(&name)).map_err(|e| format!("{name}: {e}"))?;
         ids.push(name.trim_end_matches(".hmod").to_owned());
         copied.push(name);
@@ -738,7 +872,9 @@ fn enable(home: &Path, ids: &[String]) -> Result<(), String> {
     let mut changed = false;
     for id in ids {
         let key = format!("mod.{id}");
-        let at = lines.iter().position(|l| l.trim_start().starts_with(&format!("{key}:")));
+        let at = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with(&format!("{key}:")));
         match at {
             Some(i) if lines[i].trim() == format!("{key}:true") => {}
             Some(i) => {
@@ -759,6 +895,287 @@ fn enable(home: &Path, ids: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// One Java file, translated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JavaFile {
+    pub path: String,
+    pub written: String,
+    pub classes: Vec<String>,
+    pub stats: rust_gen::Stats,
+    pub issues: Vec<String>,
+    /// The Java mixins it declares (`@Inject` and friends), for the report.
+    pub mixins: Vec<String>,
+}
+
+/// What `java` did to one archive or folder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JavaReport {
+    pub source: String,
+    pub files: Vec<JavaFile>,
+    pub classes: usize,
+    pub methods: usize,
+    pub statements: usize,
+    pub issues: usize,
+    pub mixins: usize,
+}
+
+/// Every `.java` file of an archive (a jar's sources, or a source archive's
+/// `src/main/java`), as (path inside it, text).
+pub fn java_sources(path: &Path) -> Result<Vec<(String, String)>, String> {
+    let mut out = Vec::new();
+    if path.is_dir() {
+        fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            paths.sort();
+            for p in paths {
+                if p.is_dir() {
+                    walk(&p, root, out);
+                } else if p.extension().and_then(|e| e.to_str()) == Some("java")
+                    && let Ok(text) = fs::read_to_string(&p)
+                {
+                    let name = p
+                        .strip_prefix(root)
+                        .unwrap_or(&p)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    out.push((name, text));
+                }
+            }
+        }
+        walk(path, path, &mut out);
+        return Ok(out);
+    }
+    let file = fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("{}: {e}", path.display()))?;
+    for i in 0..zip.len() {
+        let Ok(mut entry) = zip.by_index(i) else {
+            continue;
+        };
+        let name = entry.name().to_owned();
+        if !name.ends_with(".java") {
+            continue;
+        }
+        let mut text = String::new();
+        if entry.read_to_string(&mut text).is_err() {
+            continue;
+        }
+        out.push((name, text));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
+/// The mixin annotations a method carries, as `@Name(args)`.
+fn mixin_annotations(m: &java::Method) -> Vec<String> {
+    m.annotations
+        .iter()
+        .filter(|a| {
+            let short = a.name.rsplit('.').next().unwrap_or(&a.name);
+            matches!(
+                short,
+                "Inject"
+                    | "Redirect"
+                    | "ModifyVariable"
+                    | "ModifyArg"
+                    | "ModifyArgs"
+                    | "Overwrite"
+                    | "Accessor"
+                    | "Invoker"
+                    | "Shadow"
+            )
+        })
+        .map(|a| format!("@{}({})", a.name, a.args))
+        .collect()
+}
+
+/// Reads every Java file under `path` and writes the Rust it can, as
+/// `src/<package or file>.rs` in `out`, beside `hexagon-java-report.md`.
+pub fn translate_java(path: &Path, out: &Path) -> Result<JavaReport, String> {
+    let sources = java_sources(path)?;
+    if sources.is_empty() {
+        return Err(format!("{}: no .java files", path.display()));
+    }
+    // Parse everything first: a class may use another one from any file.
+    let mut units = Vec::new();
+    let mut known = std::collections::BTreeSet::new();
+    for (name, text) in &sources {
+        let toks = java::lex(text)?;
+        let mut parser = java::Parser::new(toks);
+        let unit = parser.unit();
+        fn add_known(ty: &java::TypeDecl, known: &mut std::collections::BTreeSet<String>) {
+            // Interfaces have no Rust body here, so they are not types yet.
+            if ty.kind != "interface" && ty.kind != "@interface" {
+                known.insert(ty.name.clone());
+            }
+            for nested in &ty.nested {
+                add_known(nested, known);
+            }
+        }
+        for ty in &unit.types {
+            add_known(ty, &mut known);
+        }
+        units.push((name.clone(), text.clone(), unit, parser.problems));
+    }
+    let src = out.join("src");
+    fs::create_dir_all(&src).map_err(|e| format!("{}: {e}", src.display()))?;
+    let mut report = JavaReport {
+        source: path.to_string_lossy().into_owned(),
+        files: Vec::new(),
+        classes: 0,
+        methods: 0,
+        statements: 0,
+        issues: 0,
+        mixins: 0,
+    };
+    let mut modules = Vec::new();
+    let returns = rust_gen::collect_returns(units.iter().map(|u| &u.2));
+    let arities = rust_gen::collect_arities(units.iter().map(|u| &u.2));
+    for (name, _text, unit, problems) in units {
+        let translated = rust_gen::translate(&unit, &name, &known, &returns, &arities);
+        let mut issues = translated.issues;
+        issues.extend(problems);
+        let mut mixins = Vec::new();
+        for ty in &unit.types {
+            for m in &ty.methods {
+                for a in mixin_annotations(m) {
+                    mixins.push(format!("{}::{} {a}", ty.name, m.name));
+                }
+            }
+        }
+        let module = module_name(&name, &unit);
+        let file = src.join(format!("{module}.rs"));
+        fs::write(&file, &translated.text).map_err(|e| format!("{}: {e}", file.display()))?;
+        report.classes += translated.stats.classes;
+        report.methods += translated.stats.methods;
+        report.statements += translated.stats.statements;
+        report.issues += issues.len();
+        report.mixins += mixins.len();
+        modules.push(module.clone());
+        report.files.push(JavaFile {
+            path: name,
+            written: format!("src/{module}.rs"),
+            classes: unit.types.iter().map(|t| t.name.clone()).collect(),
+            stats: translated.stats,
+            issues,
+            mixins,
+        });
+    }
+    // `lib.rs` holds the modules and the mixin scaffold.
+    let mut lib = String::from(
+        "//! Translated from Java by HexaGon.\n\
+         //! Java never runs here: this crate is what the translator could carry.\n\
+         //! Read `hexagon-java-report.md` for what it could not.\n\n",
+    );
+    for module in &modules {
+        lib.push_str(&format!("pub mod {module};\n"));
+    }
+    lib.push('\n');
+    for module in &modules {
+        lib.push_str(&format!("pub use {module}::*;\n"));
+    }
+    lib.push('\n');
+    let mixin_count = report.mixins;
+    if mixin_count > 0 {
+        lib.push_str(&format!(
+            "// {mixin_count} Java mixin(s) became TODOs: each needs an [[injection]] in\n\
+             // horizon-mixin.toml naming a Horizon function (docs/native-mods.md).\n"
+        ));
+    }
+    fs::write(src.join("lib.rs"), lib).map_err(|e| e.to_string())?;
+    let crate_name = rust_gen::snake(
+        &out.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "hexagon_port".into()),
+    );
+    fs::write(
+        out.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"{crate_name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n\n[dependencies]\nserde_json = \"1\"\n"
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    fs::write(out.join("hexagon-java-report.md"), java_markdown(&report))
+        .map_err(|e| e.to_string())?;
+    // A mixin manifest needs one target per injection; the report names each.
+    if mixin_count > 0 {
+        fs::write(
+            out.join("horizon-mixin.toml"),
+            format!(
+                "# Written by HexaGon. Fill each target with the Horizon function it hooks\n\
+                 # (docs/native-mods.md), then move the Rust beside it.\n\
+                 [mod]\nid = \"{}\"\nversion = \"0.1.0\"\npriority = 100\n\n\
+                 [compatibility]\n# horizon_revision = \"<the Nightly's commit>\"\n\n\
+                 # {} injection(s): see hexagon-java-report.md\n",
+                out.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "hexagon_port".into()),
+                mixin_count
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(report)
+}
+
+fn module_name(path: &str, unit: &java::CompilationUnit) -> String {
+    if let Some(ty) = unit.types.first()
+        && !ty.name.is_empty()
+    {
+        return rust_gen::snake(&ty.name);
+    }
+    let stem = path
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .trim_end_matches(".java");
+    rust_gen::snake(stem)
+}
+
+fn java_markdown(r: &JavaReport) -> String {
+    let mut text = format!(
+        "# HexaGon: Java to Rust\n\n{}\n\n{} files, {} classes, {} methods, {} statements; {} mixins, {} TODOs.\n\n",
+        r.source,
+        r.files.len(),
+        r.classes,
+        r.methods,
+        r.statements,
+        r.mixins,
+        r.issues
+    );
+    text.push_str("| file | Rust | classes | methods | TODOs |\n|---|---|---|---|---|\n");
+    for f in &r.files {
+        text.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            f.path,
+            f.written,
+            f.classes.join(", "),
+            f.stats.methods,
+            f.issues.len()
+        ));
+    }
+    text.push_str("\n## What needs a decision\n\n");
+    for f in &r.files {
+        if f.issues.is_empty() && f.mixins.is_empty() {
+            continue;
+        }
+        text.push_str(&format!("### {}\n\n", f.path));
+        for m in &f.mixins {
+            text.push_str(&format!("- mixin `{m}`\n"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for issue in &f.issues {
+            if seen.insert(issue.clone()) {
+                text.push_str(&format!("- {issue}\n"));
+            }
+        }
+        text.push('\n');
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -768,7 +1185,8 @@ mod tests {
         let path = dir.join(name);
         let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
         for (n, bytes) in files {
-            zip.start_file(*n, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.start_file(*n, zip::write::SimpleFileOptions::default())
+                .unwrap();
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap();
@@ -817,7 +1235,10 @@ mod tests {
             "Pack-main.zip",
             &[
                 ("Pack-main/src/main/resources/pack.mcmeta", b"{}"),
-                ("Pack-main/src/main/resources/assets/minecraft/lang/en_us.json", b"{}"),
+                (
+                    "Pack-main/src/main/resources/assets/minecraft/lang/en_us.json",
+                    b"{}",
+                ),
             ],
         );
         let i = inspect(&path).unwrap();
@@ -830,8 +1251,16 @@ mod tests {
         let home = temp("install");
         let out = home.join("out");
         fs::create_dir_all(&out).unwrap();
-        archive(&out, "ruby.hmod", &[("horizon-mod.toml", b"id = \"ruby\"\n")]);
-        fs::write(home.join("horizon-mods.txt"), "mod.other:false\nkey.ruby.zoom:key.keyboard.c\n").unwrap();
+        archive(
+            &out,
+            "ruby.hmod",
+            &[("horizon-mod.toml", b"id = \"ruby\"\n")],
+        );
+        fs::write(
+            home.join("horizon-mods.txt"),
+            "mod.other:false\nkey.ruby.zoom:key.keyboard.c\n",
+        )
+        .unwrap();
         let copied = install(&out, &home).unwrap();
         assert_eq!(copied, ["ruby.hmod"]);
         let text = fs::read_to_string(home.join("horizon-mods.txt")).unwrap();
@@ -840,7 +1269,10 @@ mod tests {
         assert!(text.contains("mod.ruby:true"));
         // A second install changes nothing.
         install(&out, &home).unwrap();
-        assert_eq!(text, fs::read_to_string(home.join("horizon-mods.txt")).unwrap());
+        assert_eq!(
+            text,
+            fs::read_to_string(home.join("horizon-mods.txt")).unwrap()
+        );
         fs::remove_dir_all(&home).unwrap();
     }
 }
